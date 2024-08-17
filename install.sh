@@ -1,71 +1,73 @@
 #!/bin/bash
 
-# Define domain variable (default example.com)
-DOMAIN="example.com"
+# Nextcloud Automated Installation Script for Ubuntu
 
-# Function to display usage information
-usage() {
-    echo "Usage: $0 -d <domain>"
-    echo "Example: $0 -d mycloud.example.com"
-    exit 1
-}
+# Function to prompt for the domain
+read -p "Enter your domain (e.g., example.com) or use IP for local access: " DOMAIN
 
-# Parse command line options
-while getopts ":d:" opt; do
-    case ${opt} in
-        d)
-            DOMAIN=${OPTARG}
-            ;;
-        \?)
-            echo "Invalid option: -$OPTARG" >&2
-            usage
-            ;;
-        :)
-            echo "Option -$OPTARG requires an argument." >&2
-            usage
-            ;;
-    esac
-done
+# Update and upgrade the system
+echo "Updating and upgrading system packages..."
+sudo apt update && sudo apt upgrade -y
 
-# Install required packages
-sudo apt update
-sudo apt install -y apache2 mariadb-server libapache2-mod-php7.4 \
-    php7.4-gd php7.4-json php7.4-mysql php7.4-curl php7.4-mbstring \
-    php7.4-intl php7.4-imagick php7.4-xml php7.4-zip
+# Install Apache, PHP, and modules
+echo "Installing Apache and PHP modules..."
+sudo apt install apache2 libapache2-mod-php php-mysql php-xml php-gd php-curl php-zip php-mbstring php-intl php-bcmath php-gmp wget unzip -y
 
-# Configure MariaDB
-sudo mysql -u root -p -e "CREATE DATABASE nextcloud;"
-sudo mysql -u root -p -e "CREATE USER 'nextclouduser'@'localhost' IDENTIFIED BY 'your_password';"
-sudo mysql -u root -p -e "GRANT ALL ON nextcloud.* TO 'nextclouduser'@'localhost';"
-sudo mysql -u root -p -e "FLUSH PRIVILEGES;"
+# Install MariaDB
+echo "Installing MariaDB..."
+sudo apt install mariadb-server -y
+sudo mysql_secure_installation
 
-# Install Nextcloud
-wget https://download.nextcloud.com/server/releases/latest.tar.bz2
-sudo tar -xjf latest.tar.bz2 -C /var/www/
-sudo chown -R www-data:www-data /var/www/nextcloud/
+# Set up MariaDB for Nextcloud
+echo "Configuring MariaDB..."
+sudo mysql -u root -p <<MYSQL_SCRIPT
+CREATE DATABASE nextcloud;
+CREATE USER 'nextclouduser'@'localhost' IDENTIFIED BY 'yourpassword';
+GRANT ALL PRIVILEGES ON nextcloud.* TO 'nextclouduser'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+MYSQL_SCRIPT
 
-# Configure Apache
-sudo tee /etc/apache2/sites-available/nextcloud.conf > /dev/null <<EOF
+# Download and install Nextcloud
+echo "Downloading and installing Nextcloud..."
+wget https://download.nextcloud.com/server/releases/latest.zip
+unzip latest.zip
+sudo mv nextcloud /var/www/
+sudo chown -R www-data:www-data /var/www/nextcloud
+sudo chmod -R 755 /var/www/nextcloud
+
+# Create Apache configuration for Nextcloud
+echo "Configuring Apache for Nextcloud..."
+sudo bash -c "cat > /etc/apache2/sites-available/nextcloud.conf <<EOF
 <VirtualHost *:80>
-    ServerAdmin admin@$DOMAIN
     DocumentRoot /var/www/nextcloud/
     ServerName $DOMAIN
 
     <Directory /var/www/nextcloud/>
-        Options +FollowSymlinks
-        AllowOverride All
         Require all granted
+        AllowOverride All
+        Options FollowSymLinks MultiViews
+
+        <IfModule mod_dav.c>
+            Dav off
+        </IfModule>
     </Directory>
 
-    ErrorLog \${APACHE_LOG_DIR}/error.log
-    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/nextcloud_error.log
+    CustomLog \${APACHE_LOG_DIR}/nextcloud_access.log combined
 </VirtualHost>
-EOF
+EOF"
 
+# Enable the site and Apache modules
 sudo a2ensite nextcloud.conf
 sudo a2enmod rewrite headers env dir mime
 sudo systemctl restart apache2
 
-# Set up SSL with Let's Encrypt
-sudo apt install certbot python3-certbot-apache
-sudo certbot --apache -d $DOMAIN
+# Optional: Set up SSL with Let's Encrypt
+read -p "Would you like to set up SSL using Let's Encrypt? (y/n): " ssl_choice
+if [ "$ssl_choice" = "y" ]; then
+  sudo apt install certbot python3-certbot-apache -y
+  sudo certbot --apache -d $DOMAIN
+fi
+
+echo "Installation completed! You can now access Nextcloud at http://$DOMAIN"
